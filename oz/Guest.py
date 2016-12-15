@@ -780,6 +780,19 @@ class Guest(object):
                 # the passed in exception was None, just raise a generic error
                 raise oz.OzException.OzException("Unknown libvirt error")
 
+    def _show_console(self, libvirt_dom):
+        import sys
+        st = libvirt_dom.connect().newStream(0)
+        libvirt_dom.openConsole(None, st, 0)
+
+        def sink(stream, buf, opaque):
+            """
+            Function that is called back from the libvirt stream.
+            """
+            # opaque is the open file object
+            sys.stdout.write(buf)
+        st.recvAll(sink, None)
+
     def _wait_for_install_finish(self, libvirt_dom, count):
         """
         Method to wait for an installation to finish.  This will wait around
@@ -787,6 +800,10 @@ class Guest(object):
         install was successful), or until the timeout is reached (at which
         point it is assumed the install failed and raise an exception).
         """
+
+        from threading import Thread
+        thread = Thread(target=self._show_console, args=(libvirt_dom,))
+        thread.start()
 
         disks, interfaces = self._get_disks_and_interfaces(libvirt_dom.XMLDesc(0))
 
