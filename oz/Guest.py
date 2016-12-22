@@ -42,6 +42,8 @@ import base64
 import hashlib
 import errno
 import re
+import sys
+from threading import Thread
 
 import oz.ozutil
 import oz.OzException
@@ -124,8 +126,10 @@ class Guest(object):
         self._discover_libvirt_type()
 
     def __init__(self, tdl, config, auto, output_disk, nicmodel, clockoffset,
-                 mousetype, diskbus, iso_allowed, url_allowed, macaddress):
+                 mousetype, diskbus, iso_allowed, url_allowed, macaddress,
+                 logserial):
         self.tdl = tdl
+        self.logserial = logserial
 
         # for backwards compatibility
         self.name = self.tdl.name
@@ -179,7 +183,7 @@ class Guest(object):
                                                                'memory', 2048)) * 1024
         else:
             self.install_memory = int(oz.ozutil.config_get_key(config, 'libvirt',
-                                                               'memory', 1024)) * 1024
+                                                               'memory', 2048)) * 1024
         self.image_type = oz.ozutil.config_get_key(config, 'libvirt',
                                                    'image_type', 'raw')
 
@@ -780,18 +784,33 @@ class Guest(object):
                 # the passed in exception was None, just raise a generic error
                 raise oz.OzException.OzException("Unknown libvirt error")
 
-    def _show_console(self, libvirt_dom):
-        import sys
+    def _log_serial_console(self, libvirt_dom):
+        """
+        Method to connect to the serial console of a VM and log
+        the output of the console to stdout
+        """
+        import re
+        #regex = re.compile("\x03(?:\d{1,2}(?:,\d{1,2})?)?", re.UNICODE)
+        regex = re.compile("\x1f|\x02|\x12|\x0f|\x16|\x03(?:\d{1,2}(?:,\d{1,2})?)?", re.UNICODE)
+
+        # create a new "stream" and associate it with serial console
         st = libvirt_dom.connect().newStream(0)
         libvirt_dom.openConsole(None, st, 0)
 
-        def sink(stream, buf, opaque):
-            """
-            Function that is called back from the libvirt stream.
-            """
-            # opaque is the open file object
-            sys.stdout.write(buf)
-        st.recvAll(sink, None)
+        buf512=''
+
+        # Handler function that is called back from the libvirt stream.
+        def handler(stream, buf, opaque):
+            #sys.stdout.write(regex.sub('', buf))
+            #sys.stdout.write(buf)
+            buf512+=buf
+            if len(buf512) > 512:
+                sys.stdout.write(regex.sub('', buf512))
+                buf512=''
+            #self.log.info("SERIAL CONSOLE:" + buf)
+
+        # pass all output from the stream to the handler
+        st.recvAll(handler, None)
 
     def _wait_for_install_finish(self, libvirt_dom, count):
         """
@@ -801,9 +820,9 @@ class Guest(object):
         point it is assumed the install failed and raise an exception).
         """
 
-        from threading import Thread
-        thread = Thread(target=self._show_console, args=(libvirt_dom,))
-        thread.start()
+        if self.logserial:
+	    thread = Thread(target=self._log_serial_console, args=(libvirt_dom,))
+	    thread.start()
 
         disks, interfaces = self._get_disks_and_interfaces(libvirt_dom.XMLDesc(0))
 
@@ -1471,10 +1490,11 @@ class CDGuest(Guest):
             self.seqnum = seqnum
 
     def __init__(self, tdl, config, auto, output_disk, nicmodel, clockoffset,
-                 mousetype, diskbus, iso_allowed, url_allowed, macaddress):
+                 mousetype, diskbus, iso_allowed, url_allowed, macaddress,
+                 logserial):
         Guest.__init__(self, tdl, config, auto, output_disk, nicmodel,
                        clockoffset, mousetype, diskbus, iso_allowed,
-                       url_allowed, macaddress)
+                       url_allowed, macaddress, logserial)
 
         self.orig_iso = os.path.join(self.data_dir, "isos",
                                      self.tdl.distro + self.tdl.update + self.tdl.arch + "-" + self.tdl.installtype + ".iso")
