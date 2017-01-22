@@ -796,21 +796,21 @@ class Guest(object):
         # create a new "stream" and associate it with serial console
         st = libvirt_dom.connect().newStream(0)
         libvirt_dom.openConsole(None, st, 0)
+        
+        buf512=[]
 
-        buf512=''
 
         # Handler function that is called back from the libvirt stream.
-        def handler(stream, buf, opaque):
+        def handler(stream, buf, buf512):
             #sys.stdout.write(regex.sub('', buf))
             #sys.stdout.write(buf)
-            buf512+=buf
-            if len(buf512) > 512:
-                sys.stdout.write(regex.sub('', buf512))
-                buf512=''
-            #self.log.info("SERIAL CONSOLE:" + buf)
+            buf512.append(buf)
+            if len(''.join(buf512)) > 512:
+                sys.stdout.write(regex.sub('', ''.join(buf512)))
+                del buf512[:]
 
         # pass all output from the stream to the handler
-        st.recvAll(handler, None)
+        st.recvAll(handler, buf512)
 
     def _wait_for_install_finish(self, libvirt_dom, count):
         """

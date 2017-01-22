@@ -79,7 +79,7 @@ Subsystem	sftp	/usr/libexec/openssh/sftp-server
 
         self.cmdline = "method=" + self.url + " ks=file:/ks.cfg"
         if logserial:
-            self.cmdline += " " + "console=ttyS0 cmdline inst.noshell" # systemd.log_color=false"
+            self.cmdline += " " + "console=ttyS0 text systemd.log_color=false"
         if self.tdl.kernel_param:
             self.cmdline += " " + self.tdl.kernel_param
 
