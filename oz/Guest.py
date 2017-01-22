@@ -784,30 +784,45 @@ class Guest(object):
                 # the passed in exception was None, just raise a generic error
                 raise oz.OzException.OzException("Unknown libvirt error")
 
+    def _show_console(self, libvirt_dom):
+        import sys
+        st = libvirt_dom.connect().newStream(0)
+        libvirt_dom.openConsole(None, st, 0)
+
+        def sink(stream, buf, opaque):
+            """
+            Function that is called back from the libvirt stream.
+            """
+            # opaque is the open file object
+            sys.stdout.write(buf)
+        st.recvAll(sink, None)
+
     def _log_serial_console(self, libvirt_dom):
         """
         Method to connect to the serial console of a VM and log
         the output of the console to stdout
         """
-        import re
-        #regex = re.compile("\x03(?:\d{1,2}(?:,\d{1,2})?)?", re.UNICODE)
-        regex = re.compile("\x1f|\x02|\x12|\x0f|\x16|\x03(?:\d{1,2}(?:,\d{1,2})?)?", re.UNICODE)
-
         # create a new "stream" and associate it with serial console
         st = libvirt_dom.connect().newStream(0)
         libvirt_dom.openConsole(None, st, 0)
-        
-        buf512=[]
 
+
+        
+        # have to use array and not a string because we need to pass
+        # by reference and not by value. if we pass a string into
+        # handler we can't modify it. We will print each line of text
+        # to the screen from the buffer. If the buffer exceeds 512
+        # then go ahead and print and don't wait for newline.
+        buf512=[]
 
         # Handler function that is called back from the libvirt stream.
         def handler(stream, buf, buf512):
-            #sys.stdout.write(regex.sub('', buf))
-            #sys.stdout.write(buf)
             buf512.append(buf)
-            if len(''.join(buf512)) > 512:
-                sys.stdout.write(regex.sub('', ''.join(buf512)))
+            bufstr = ''.join(buf512)
+            if '\n' in bufstr or len(bufstr) > 512:
+                sys.stdout.write(bufstr)
                 del buf512[:]
+                
 
         # pass all output from the stream to the handler
         st.recvAll(handler, buf512)
@@ -821,7 +836,9 @@ class Guest(object):
         """
 
         if self.logserial:
-	    thread = Thread(target=self._log_serial_console, args=(libvirt_dom,))
+	    #thread = Thread(target=self._log_serial_console, args=(libvirt_dom,))
+	    thread = Thread(target=self._show_console, args=(libvirt_dom,))
+            thread.daemon = True # kill this thread when program exits
 	    thread.start()
 
         disks, interfaces = self._get_disks_and_interfaces(libvirt_dom.XMLDesc(0))
