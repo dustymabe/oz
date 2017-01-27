@@ -787,19 +787,31 @@ class Guest(object):
     def _log_serial_console(self, libvirt_dom):
         """
         Method to connect to the serial console of a VM and log
-        the output of the console to stdout
+        the output of the console to the log
         """
         st = libvirt_dom.connect().newStream(0)
         libvirt_dom.openConsole(None, st, 0)
 
-        def sink(stream, buf, opaque):
-            """
-            Function that is called back from the libvirt stream.
-            'buf' is the data that we will write to stdout
-            'opaque' is whatever the caller wants it to be. Not used
-            """
-            sys.stdout.write(buf)
-        st.recvAll(sink, None)
+        # have to use array and not a string because we need to pass
+        # by reference and not by value. if we pass a string into
+        # handler we can't modify it. We will print each line of text
+        # to the screen from the buffer. If the buffer exceeds 512
+        # then go ahead and print and don't wait for newline.
+        buf512=[]
+
+        # Handler function that is called back from the libvirt stream.
+        def handler(stream, buf, buf512):
+            buf512.append(buf)
+            bufstr = ''.join(buf512)
+            if '\n' in bufstr or len(bufstr) > 512:
+                # log a separate line for each newline
+                for line in bufstr.split('\n'):
+                    if line:
+                        self.log.info(line)
+                del buf512[:]
+
+        # pass all output from the stream to the handler
+        st.recvAll(handler, buf512)
 
     def _wait_for_install_finish(self, libvirt_dom, count):
         """
@@ -810,7 +822,7 @@ class Guest(object):
         """
 
         if self.logserial:
-	    thread = Thread(target=self._show_console, args=(libvirt_dom,))
+	    thread = Thread(target=self._log_serial_console, args=(libvirt_dom,))
             thread.daemon = True # kill this thread when program exits
 	    thread.start()
 
