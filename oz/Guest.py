@@ -799,27 +799,23 @@ class Guest(object):
         # then go ahead and print and don't wait for newline.
         buf512=[]
 
-        #bufstr = bufstr.replace('\n', ' ')
         # Handler function that is called back from the libvirt stream.
         def handler(stream, buf, buf512):
             buf512.append(buf)
             bufstr = ''.join(buf512)
 
-            # nothing to do if no lines and buffer not full
-            if '\n' not in bufstr and len(bufstr) < 512:
-                return
-
-            del buf512[:]  # clear out buffer
-
-            if len(bufstr) >= 512:
-                self.log.info(bufstr)
-            else:
-                # print all complete lines, preserve incomplete lines
+            # If we have some complete lines then print them out and
+            # preserve any incomplete lines. Also, if we no newline
+            # and more than 512 characters, go ahead and print.
+            if '\n' in bufstr:
                 lines = bufstr.split('\n')
                 for line in lines[:-1]:
                     self.log.info(line)
+                del buf512[:]
                 buf512.append(lines[-1])
-
+            elif len(bufstr) > 512:
+                self.log.info(bufstr)
+                del buf512[:]
 
         # pass all output from the stream to the handler
         st.recvAll(handler, buf512)
