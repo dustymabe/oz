@@ -43,7 +43,7 @@ import hashlib
 import errno
 import re
 import sys
-from threading import Thread
+import threading
 
 import oz.ozutil
 import oz.OzException
@@ -784,13 +784,13 @@ class Guest(object):
                 # the passed in exception was None, just raise a generic error
                 raise oz.OzException.OzException("Unknown libvirt error")
 
-    def _log_serial_console(self, libvirt_dom):
+    def _log_serial_console(self, stream, stop):
         """
         Method to connect to the serial console of a VM and log
-        the output of the console to the log
+        the output of the console to the log. stream is the data
+        stream for us to receive information from and stop is an
+        event that we can use to know when to stop reading data
         """
-        st = libvirt_dom.connect().newStream(0)
-        libvirt_dom.openConsole(None, st, 0)
 
         # have to use array and not a string because we need to pass
         # by reference and not by value. if we pass a string into
@@ -800,9 +800,13 @@ class Guest(object):
         buf512=[]
 
         # Handler function that is called back from the libvirt stream.
-        def handler(stream, buf, buf512):
+        def handler(stream, buf, argstuple):
+            buf512, stop = argstuple
             buf512.append(buf)
             bufstr = ''.join(buf512)
+
+            if stop.isSet():
+                stream.finish()
 
             # If we have some complete lines then print them out and
             # preserve any incomplete lines. Also, if we no newline
@@ -818,7 +822,7 @@ class Guest(object):
                 del buf512[:]
 
         # pass all output from the stream to the handler
-        st.recvAll(handler, buf512)
+        stream.recvAll(handler, (buf512, stop))
 
     def _wait_for_install_finish(self, libvirt_dom, count):
         """
@@ -829,9 +833,12 @@ class Guest(object):
         """
 
         if self.logserial:
-	    thread = Thread(target=self._log_serial_console, args=(libvirt_dom,))
-            thread.daemon = True # kill this thread when program exits
-	    thread.start()
+            stream = libvirt_dom.connect().newStream(0)
+            libvirt_dom.openConsole(None, stream, 0)
+            stop = threading.Event() # used to signal thread to stop
+            thread = threading.Thread(target=self._log_serial_console,
+                                      args=(stream, stop,))
+            thread.start()
 
         disks, interfaces = self._get_disks_and_interfaces(libvirt_dom.XMLDesc(0))
 
@@ -879,20 +886,28 @@ class Guest(object):
             count -= 1
             time.sleep(1)
 
-        # We get here because of a libvirt exception, an absolute timeout, or
-        # an I/O timeout; we sort this out below
-        if count == 0:
-            # if we timed out, then let's make sure to take a screenshot.
-            screenshot_text = self._capture_screenshot(libvirt_dom)
-            raise oz.OzException.OzException("Timed out waiting for install to finish.  %s" % (screenshot_text))
-        elif inactivity_countdown == 0:
-            # if we saw no disk or network activity in the countdown window,
-            # we presume the install has hung.  Fail here
-            screenshot_text = self._capture_screenshot(libvirt_dom)
-            raise oz.OzException.OzException("No disk activity in %d seconds, failing.  %s" % (self.inactivity_timeout, screenshot_text))
+        try:
+            # We get here because of a libvirt exception, an absolute timeout, or
+            # an I/O timeout; we sort this out below
+            if count == 0:
+                # if we timed out, then let's make sure to take a screenshot.
+                screenshot_text = self._capture_screenshot(libvirt_dom)
+                raise oz.OzException.OzException("Timed out waiting for install to finish.  %s" % (screenshot_text))
+            elif inactivity_countdown == 0:
+                # if we saw no disk or network activity in the countdown window,
+                # we presume the install has hung.  Fail here
+                screenshot_text = self._capture_screenshot(libvirt_dom)
+                raise oz.OzException.OzException("No disk activity in %d seconds, failing.  %s" % (self.inactivity_timeout, screenshot_text))
 
-        # We get here only if we got a libvirt exception
-        self._wait_for_clean_shutdown(libvirt_dom, saved_exception)
+            # We get here only if we got a libvirt exception
+            self._wait_for_clean_shutdown(libvirt_dom, saved_exception)
+
+        finally:
+            if self.logserial:
+                self.log.debug("signalling serial log thread stop")
+                stop.set()
+                stream.send('..........') # will unblock I/O
+                thread.join()
 
         self.log.info("Install of %s succeeded", self.tdl.name)
 
